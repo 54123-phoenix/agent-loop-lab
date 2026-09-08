@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-loop-lab"
+version = "0.1.0"
+description = "A minimal, framework-free Python agent loop for learning and evaluation."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Phoenix" }]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
