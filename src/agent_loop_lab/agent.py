@@ -58,6 +58,7 @@ class Agent:
         user_input: str,
         *,
         history: Sequence[Message] = (),
+        memories: Sequence[str] = (),
     ) -> AgentRun:
         if not user_input.strip():
             raise ValueError("user_input cannot be empty")
@@ -82,9 +83,13 @@ class Agent:
                 )
             schemas = self._tools.schemas()
             selection = (
-                self._context_manager.build(tuple(messages), schemas)
+                self._context_manager.build(tuple(messages), schemas, memories)
                 if self._context_manager is not None
-                else None
+                else (
+                    ContextManager().build(tuple(messages), schemas, memories)
+                    if memories
+                    else None
+                )
             )
             model_messages = selection.messages if selection is not None else tuple(messages)
             self._emit(
@@ -96,6 +101,9 @@ class Agent:
                     "dropped_messages": selection.dropped_messages if selection else 0,
                     "estimated_input_tokens": (
                         selection.estimated_input_tokens if selection else None
+                    ),
+                    "retrieved_memories": (
+                        selection.retrieved_memories if selection else 0
                     ),
                 },
             )

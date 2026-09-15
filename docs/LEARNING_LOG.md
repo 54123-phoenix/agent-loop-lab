@@ -15,3 +15,18 @@
 Next learning target: independently modify one layer and explain the failure it is
 designed to prevent, rather than memorizing every Python type annotation.
 
+## 2026-09-15 - Agent loop V0.6-V0.10 hardening
+
+- Separated complete conversation history from the token-limited model context.
+- Added durable SQLite history, optimistic session versions, per-session
+  coordination, and idempotent HTTP requests.
+- Replaced string-only tool failures with stable error data and side-effect-safe
+  retry rules.
+- Added parallel tool batches while bounding steps, tool count, wall time, output,
+  and approval of side effects.
+- Separated long-term facts/preferences/goals from chat history; added scoped
+  retrieval, provenance, confidence, expiry, and deletion.
+
+Next learning target: choose one failure scenario (duplicate request, stale write,
+unsafe retry, context overflow, or false memory), reproduce it with a test, and
+explain which single protection stops it.

@@ -36,6 +36,12 @@ from .memory import (
     InMemoryConversationStore,
     SQLiteConversationStore,
 )
+from .long_term_memory import (
+    InMemoryLongTermMemoryStore,
+    LongTermMemoryStore,
+    MemoryRecord,
+    SQLiteLongTermMemoryStore,
+)
 from .models import Message, ModelResponse, ToolCall, ToolError, ToolResult
 from .tools import ToolRegistry, ToolSpec, build_default_registry
 from .tracing import InMemoryTraceSink, TraceEvent, TraceSink
@@ -58,9 +64,12 @@ __all__ = [
     "EvaluationSummary",
     "ExtractiveSummarizer",
     "InMemoryConversationStore",
+    "InMemoryLongTermMemoryStore",
     "InMemoryRequestJournal",
     "InMemoryTraceSink",
     "Message",
+    "LongTermMemoryStore",
+    "MemoryRecord",
     "ModelResponse",
     "RequestJournal",
     "RunBudget",
@@ -68,6 +77,7 @@ __all__ = [
     "SessionCoordinator",
     "SQLiteRequestJournal",
     "SQLiteConversationStore",
+    "SQLiteLongTermMemoryStore",
     "ToolSpec",
     "ToolCall",
     "ToolApprovalPolicy",

@@ -10,13 +10,17 @@ replacing it with a framework.
 
 ```text
 caller
-  -> Agent.run(user_input, optional history)
+  -> retrieve relevant structured memories
+  -> Agent.run(user_input, optional history, optional memories)
+  -> ContextManager applies history/summary/memory token budgets
   -> ModelAdapter.respond(messages, tool schemas)
      -> final answer -> AgentRun
-     -> ToolCall
+     -> one or more ToolCalls
+        -> run/tool-count/time budget checks
+        -> side-effect approval policy
         -> ToolRegistry JSON Schema validation
-        -> handler execution
-        -> ToolResult
+        -> parallel async handler execution
+        -> structured ToolResult
         -> tool Message with call_id
         -> next model step
   -> max_steps -> AgentRun(answer=None)
@@ -29,7 +33,7 @@ the loop to a logging vendor.
 
 ## Contract decisions
 
-1. `ModelResponse` contains exactly one final answer or one tool call.
+1. `ModelResponse` contains exactly one final answer, one tool call, or one call batch.
 2. `ToolCall` and tool messages retain `call_id`, so a provider can pair a
    function result with the original request.
 3. Tool arguments are validated before handlers run. Validation failures and
@@ -41,14 +45,12 @@ the loop to a logging vendor.
 
 ## Context and memory
 
-`Agent.run(..., history=...)` accepts prior messages but does not own persistence.
-`InMemoryConversationStore` provides a process-local LRU session store with both a
-session cap and a message cap. Orphaned function outputs are removed when a context
-window cuts off the matching function call.
-
-This is short-term conversation state, not semantic long-term memory. A production
-implementation would replace the store protocol with durable storage and add
-summarization or retrieval before the model request.
+Conversation events and long-term memories have different jobs. The event store is
+append-only evidence of what happened. `ContextManager` selects a bounded recent
+window and an optional summary. The long-term store keeps small structured records,
+retrieves only relevant live records for one owner, and supports explicit deletion.
+SQLite implementations survive restart; in-memory implementations keep tests and
+local demos simple.
 
 ## OpenAI adapter
 
@@ -56,13 +58,13 @@ summarization or retrieval before the model request.
 Assistant tool calls become `function_call` items and tool observations become
 `function_call_output` items. The adapter parses either the first function call or
 the response's output text into the framework-neutral `ModelResponse` contract.
+Multiple function calls are preserved as one batch.
 
 ## Remaining limitations
 
-- no persistent database or distributed session coordination;
-- no per-session concurrency control, so overlapping writes can lose an update;
 - no auth, quotas, rate limiting, or tenant isolation;
-- no parallel custom tool execution;
+- no distributed session lock across multiple server processes;
+- no vector retrieval or automatic memory extraction/consolidation;
 - no streaming responses;
 - no cancellation of already-running synchronous thread work after an async
   timeout;

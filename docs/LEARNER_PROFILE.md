@@ -12,12 +12,17 @@
 - Can separate the essential loop from surrounding engineering syntax after a
   concrete walkthrough.
 - Questions whether implementation detail materially serves the learning goal.
+- Can identify architectural weaknesses before knowing their implementation syntax,
+  especially undifferentiated memory, missing context budgets, and weak tool safety.
 
 ## Current gaps
 
 - Python engineering syntax (`dataclass`, protocols, type annotations, factories,
   and package layout) still obscures otherwise understood control flow.
 - Needs more practice moving from pseudocode to a small runnable implementation.
+- Has now seen a complete incremental path from a toy loop to durable context,
+  concurrency control, guarded tools, and structured retrieval, but should verify
+  understanding by changing one behavior personally.
 - Should build confidence through controlled modifications and tests rather than
   trying to memorize a finished codebase.
 
@@ -28,4 +33,3 @@
 3. Make one behavioral change at a time and add a test for it.
 4. Be able to explain and debug AI-assisted code; closed-book boilerplate recall is
    not the target.
-

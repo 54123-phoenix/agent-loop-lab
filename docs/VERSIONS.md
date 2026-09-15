@@ -1,4 +1,4 @@
-# From V0.1 to V0.5
+# From V0.1 to V0.10
 
 Read this file beside the code. Each version answers one question that the previous
 version cannot answer.
@@ -147,3 +147,23 @@ order.
 - Side-effecting tools are denied by default unless an approval policy allows them.
 - Oversized tool output is truncated before it enters history or model context.
 - A batch that would exceed its tool-call budget is rejected before any handler runs.
+
+## V0.10: can memory be useful without becoming an unbounded transcript?
+
+Added `long_term_memory.py` and memory endpoints. Durable memories are separate
+from append-only conversation history and carry a category, owner, confidence,
+source event IDs, creation time, and optional expiry.
+
+```text
+current user message
+  -> retrieve relevant live records for this session
+  -> render records as untrusted context, not instructions
+  -> fit them inside a dedicated memory token budget
+  -> combine with recent conversation and optional summary
+  -> model request
+```
+
+The API supports explicit create, list/search, and delete operations. When
+`AGENT_DB_PATH` is set, conversation events, idempotency records, and memories all
+survive restarts in SQLite. Keyword retrieval is intentionally inspectable; vector
+search and model-driven memory extraction remain future layers.
