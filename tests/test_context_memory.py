@@ -12,6 +12,7 @@ from agent_loop_lab import (
     ContextBudget,
     ContextManager,
     Message,
+    ConversationConflictError,
     SQLiteConversationStore,
     ToolCall,
 )
@@ -96,6 +97,23 @@ class SQLiteConversationStoreTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 store.save("session", [Message("user", "changed")])
+
+    def test_rejects_stale_session_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteConversationStore(Path(directory) / "history.db")
+            snapshot = store.load_snapshot("session")
+            store.save_if_version(
+                "session",
+                [Message("user", "first")],
+                expected_version=snapshot.version,
+            )
+
+            with self.assertRaises(ConversationConflictError):
+                store.save_if_version(
+                    "session",
+                    [Message("user", "stale")],
+                    expected_version=snapshot.version,
+                )
 
 
 if __name__ == "__main__":

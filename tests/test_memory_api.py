@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
+import asyncio
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -10,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from agent_loop_lab import Agent, Message, ModelResponse, build_default_registry
 from agent_loop_lab.api import create_app
+from agent_loop_lab.coordination import SessionCoordinator, SQLiteRequestJournal
 from agent_loop_lab.memory import InMemoryConversationStore
 
 
@@ -104,6 +107,83 @@ class ApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 422)
+
+    def test_request_id_makes_retry_idempotent(self) -> None:
+        payload = {
+            "session_id": "demo",
+            "request_id": "request-1",
+            "message": "hello",
+        }
+        first = self.client.post("/v1/chat", json=payload)
+        second = self.client.post("/v1/chat", json=payload)
+
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json(), first.json())
+        session = self.client.get("/v1/sessions/demo").json()
+        self.assertEqual(len(session["messages"]), 2)
+
+    def test_rejects_request_id_reuse_with_different_input(self) -> None:
+        self.client.post(
+            "/v1/chat",
+            json={"session_id": "demo", "request_id": "same", "message": "one"},
+        )
+        response = self.client.post(
+            "/v1/chat",
+            json={"session_id": "demo", "request_id": "same", "message": "two"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"]["code"], "idempotency_conflict")
+
+
+class CoordinationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_session_work_is_serialized(self) -> None:
+        coordinator = SessionCoordinator()
+        active = 0
+        peak = 0
+
+        async def worker() -> None:
+            nonlocal active, peak
+            async with coordinator.hold("session"):
+                active += 1
+                peak = max(peak, active)
+                await asyncio.sleep(0.01)
+                active -= 1
+
+        await asyncio.gather(worker(), worker())
+
+        self.assertEqual(peak, 1)
+
+    async def test_different_sessions_can_run_together(self) -> None:
+        coordinator = SessionCoordinator()
+        ready = asyncio.Event()
+        active = 0
+        peak = 0
+
+        async def worker(session_id: str) -> None:
+            nonlocal active, peak
+            async with coordinator.hold(session_id):
+                active += 1
+                peak = max(peak, active)
+                if active == 2:
+                    ready.set()
+                await asyncio.wait_for(ready.wait(), timeout=0.1)
+                active -= 1
+
+        await asyncio.gather(worker("one"), worker("two"))
+
+        self.assertEqual(peak, 2)
+
+
+class SQLiteRequestJournalTests(unittest.TestCase):
+    def test_idempotency_record_survives_recreation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "requests.db"
+            SQLiteRequestJournal(path).put("session", "request", {"answer": "done"})
+
+            result = SQLiteRequestJournal(path).get("session", "request")
+
+            self.assertEqual(result, {"answer": "done"})
 
 
 if __name__ == "__main__":

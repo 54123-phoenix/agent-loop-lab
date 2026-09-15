@@ -112,3 +112,16 @@ Added `context.py` and `SQLiteConversationStore`.
 
 The default token estimator is deliberately approximate and dependency-free. A
 provider tokenizer can replace it through the `TokenEstimator` protocol.
+
+## V0.7: can concurrent requests avoid losing or duplicating messages?
+
+Added `coordination.py`, versioned conversation snapshots, and API `request_id`.
+
+- Each session has an optimistic version; stale saves fail with a conflict instead
+  of silently replacing newer history.
+- `SessionCoordinator` serializes requests for one session inside a process while
+  allowing different sessions to run concurrently.
+- Repeating the same `request_id` and payload returns the recorded response without
+  running the model or appending messages again.
+- Reusing a `request_id` with different input returns an idempotency conflict.
+- SQLite request journals preserve idempotency records across restarts.

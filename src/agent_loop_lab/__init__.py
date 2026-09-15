@@ -9,6 +9,12 @@ from .context import (
     ContextSelection,
     ExtractiveSummarizer,
 )
+from .coordination import (
+    InMemoryRequestJournal,
+    RequestJournal,
+    SessionCoordinator,
+    SQLiteRequestJournal,
+)
 from .evaluation import (
     EvaluationCase,
     EvaluationResult,
@@ -17,7 +23,13 @@ from .evaluation import (
     load_jsonl,
     run_evaluation,
 )
-from .memory import ConversationStore, InMemoryConversationStore, SQLiteConversationStore
+from .memory import (
+    ConversationConflictError,
+    ConversationSnapshot,
+    ConversationStore,
+    InMemoryConversationStore,
+    SQLiteConversationStore,
+)
 from .models import Message, ModelResponse, ToolCall, ToolResult
 from .tools import ToolRegistry, ToolSpec, build_default_registry
 from .tracing import InMemoryTraceSink, TraceEvent, TraceSink
@@ -32,14 +44,20 @@ __all__ = [
     "ContextBudget",
     "ContextManager",
     "ContextSelection",
+    "ConversationConflictError",
+    "ConversationSnapshot",
     "EvaluationCase",
     "EvaluationResult",
     "EvaluationSummary",
     "ExtractiveSummarizer",
     "InMemoryConversationStore",
+    "InMemoryRequestJournal",
     "InMemoryTraceSink",
     "Message",
     "ModelResponse",
+    "RequestJournal",
+    "SessionCoordinator",
+    "SQLiteRequestJournal",
     "SQLiteConversationStore",
     "ToolSpec",
     "ToolCall",

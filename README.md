@@ -24,6 +24,7 @@ user message
 | V0.4 | async loop, timeouts, retries, tracing | slow and transient failures are bounded |
 | V0.5 | FastAPI and bounded session memory | validated HTTP input and controlled context growth |
 | V0.6 | SQLite event history and ContextManager | durable history and token-budgeted model context |
+| V0.7 | session coordination and request journal | concurrency conflicts and retry duplication |
 
 See [docs/VERSIONS.md](docs/VERSIONS.md) for the code path and trade-offs of each
 layer. This is still a learning project rather than a production framework.

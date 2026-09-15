@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
@@ -23,6 +23,16 @@ class ConversationStore(Protocol):
     def clear(self, session_id: str) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationSnapshot:
+    messages: tuple[Message, ...]
+    version: int
+
+
+class ConversationConflictError(RuntimeError):
+    """Raised when a caller tries to save from a stale snapshot."""
+
+
 class InMemoryConversationStore:
     """LRU session store with a fixed message window; data is process-local."""
 
@@ -33,25 +43,62 @@ class InMemoryConversationStore:
             raise ValueError("max_messages must be at least 2")
         self._max_sessions = max_sessions
         self._max_messages = max_messages
-        self._sessions: OrderedDict[str, tuple[Message, ...]] = OrderedDict()
+        self._sessions: OrderedDict[str, ConversationSnapshot] = OrderedDict()
         self._lock = RLock()
 
     def load(self, session_id: str) -> tuple[Message, ...]:
         self._validate_session_id(session_id)
         with self._lock:
-            messages = self._sessions.get(session_id, ())
+            snapshot = self._sessions.get(session_id, ConversationSnapshot((), 0))
             if session_id in self._sessions:
                 self._sessions.move_to_end(session_id)
-            return messages
+            return snapshot.messages
 
     def save(self, session_id: str, messages: Sequence[Message]) -> None:
         self._validate_session_id(session_id)
-        window = self._safe_window(messages)
         with self._lock:
-            self._sessions[session_id] = window
-            self._sessions.move_to_end(session_id)
-            while len(self._sessions) > self._max_sessions:
-                self._sessions.popitem(last=False)
+            current = self._sessions.get(session_id, ConversationSnapshot((), 0))
+            self._save_if_version_locked(session_id, messages, current.version)
+
+    def load_snapshot(self, session_id: str) -> ConversationSnapshot:
+        self._validate_session_id(session_id)
+        with self._lock:
+            snapshot = self._sessions.get(session_id, ConversationSnapshot((), 0))
+            if session_id in self._sessions:
+                self._sessions.move_to_end(session_id)
+            return snapshot
+
+    def save_if_version(
+        self,
+        session_id: str,
+        messages: Sequence[Message],
+        *,
+        expected_version: int,
+    ) -> int:
+        self._validate_session_id(session_id)
+        with self._lock:
+            return self._save_if_version_locked(session_id, messages, expected_version)
+
+    def _save_if_version_locked(
+        self,
+        session_id: str,
+        messages: Sequence[Message],
+        expected_version: int,
+    ) -> int:
+        current = self._sessions.get(session_id, ConversationSnapshot((), 0))
+        if current.version != expected_version:
+            raise ConversationConflictError(
+                f"session version changed from {expected_version} to {current.version}"
+            )
+        next_version = current.version + 1
+        self._sessions[session_id] = ConversationSnapshot(
+            self._safe_window(messages),
+            next_version,
+        )
+        self._sessions.move_to_end(session_id)
+        while len(self._sessions) > self._max_sessions:
+            self._sessions.popitem(last=False)
+        return next_version
 
     def clear(self, session_id: str) -> bool:
         self._validate_session_id(session_id)
@@ -89,8 +136,15 @@ class SQLiteConversationStore:
         self._initialize()
 
     def load(self, session_id: str) -> tuple[Message, ...]:
+        return self.load_snapshot(session_id).messages
+
+    def load_snapshot(self, session_id: str) -> ConversationSnapshot:
         InMemoryConversationStore._validate_session_id(session_id)
         with self._connect() as connection:
+            version_row = connection.execute(
+                "SELECT version FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
             rows = connection.execute(
                 """
                 SELECT payload_json
@@ -100,19 +154,51 @@ class SQLiteConversationStore:
                 """,
                 (session_id,),
             ).fetchall()
-        return tuple(self._decode_message(row[0]) for row in rows)
+        return ConversationSnapshot(
+            tuple(self._decode_message(row[0]) for row in rows),
+            int(version_row[0]) if version_row else 0,
+        )
 
     def save(self, session_id: str, messages: Sequence[Message]) -> None:
         InMemoryConversationStore._validate_session_id(session_id)
+        snapshot = self.load_snapshot(session_id)
+        self.save_if_version(
+            session_id,
+            messages,
+            expected_version=snapshot.version,
+        )
+
+    def save_if_version(
+        self,
+        session_id: str,
+        messages: Sequence[Message],
+        *,
+        expected_version: int,
+    ) -> int:
+        InMemoryConversationStore._validate_session_id(session_id)
         incoming = tuple(messages)
-        existing = self.load(session_id)
-        if incoming[: len(existing)] != existing:
-            raise ValueError("messages must extend the persisted session history")
-        new_messages = incoming[len(existing) :]
-        if not new_messages:
-            return
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            version_row = connection.execute(
+                "SELECT version FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            current_version = int(version_row[0]) if version_row else 0
+            if current_version != expected_version:
+                raise ConversationConflictError(
+                    f"session version changed from {expected_version} to {current_version}"
+                )
+            rows = connection.execute(
+                """
+                SELECT payload_json FROM conversation_events
+                WHERE session_id = ? ORDER BY sequence
+                """,
+                (session_id,),
+            ).fetchall()
+            existing = tuple(self._decode_message(row[0]) for row in rows)
+            if incoming[: len(existing)] != existing:
+                raise ValueError("messages must extend the persisted session history")
+            new_messages = incoming[len(existing) :]
             row = connection.execute(
                 "SELECT COALESCE(MAX(sequence), 0) FROM conversation_events WHERE session_id = ?",
                 (session_id,),
@@ -127,6 +213,15 @@ class SQLiteConversationStore:
                     """,
                     (session_id, sequence, self._encode_message(message)),
                 )
+            next_version = current_version + 1
+            connection.execute(
+                """
+                INSERT INTO sessions(session_id, version) VALUES (?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET version = excluded.version
+                """,
+                (session_id, next_version),
+            )
+        return next_version
 
     def clear(self, session_id: str) -> bool:
         InMemoryConversationStore._validate_session_id(session_id)
@@ -135,10 +230,19 @@ class SQLiteConversationStore:
                 "DELETE FROM conversation_events WHERE session_id = ?",
                 (session_id,),
             )
+            connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
         return cursor.rowcount > 0
 
     def _initialize(self) -> None:
         with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    session_id TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL
+                )
+                """
+            )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_events (
