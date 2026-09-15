@@ -93,11 +93,20 @@ class OpenAIResponsesModel:
             if message.role == "tool":
                 if not message.call_id:
                     raise ValueError("Tool messages require call_id for the Responses API")
+                output = (
+                    json.dumps(
+                        message.tool_result.to_observation(),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    if message.tool_result is not None
+                    else message.content
+                )
                 result.append(
                     {
                         "type": "function_call_output",
                         "call_id": message.call_id,
-                        "output": message.content,
+                        "output": output,
                     }
                 )
             elif message.tool_call is not None:

@@ -129,6 +129,7 @@ class Agent:
                     name=result.name,
                     content=f"ok={result.ok} content={result.content}",
                     call_id=call.call_id,
+                    tool_result=result,
                 )
             )
             self._emit(

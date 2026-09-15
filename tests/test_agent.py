@@ -31,6 +31,8 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(run.answer, "The result is 42.")
         self.assertEqual(run.steps, 2)
         self.assertIn("content=42", run.messages[2].content)
+        self.assertTrue(run.messages[2].tool_result.ok)
+        self.assertEqual(run.messages[2].tool_result.data, "42")
 
     def test_unknown_tool_becomes_a_failed_observation(self) -> None:
         model = ScriptedModel(

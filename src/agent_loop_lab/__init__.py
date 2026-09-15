@@ -30,7 +30,7 @@ from .memory import (
     InMemoryConversationStore,
     SQLiteConversationStore,
 )
-from .models import Message, ModelResponse, ToolCall, ToolResult
+from .models import Message, ModelResponse, ToolCall, ToolError, ToolResult
 from .tools import ToolRegistry, ToolSpec, build_default_registry
 from .tracing import InMemoryTraceSink, TraceEvent, TraceSink
 
@@ -61,6 +61,7 @@ __all__ = [
     "SQLiteConversationStore",
     "ToolSpec",
     "ToolCall",
+    "ToolError",
     "ToolRegistry",
     "ToolResult",
     "TraceEvent",

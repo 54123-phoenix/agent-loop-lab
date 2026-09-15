@@ -17,12 +17,21 @@ class ToolCall:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolError:
+    code: str
+    message: str
+    retryable: bool = False
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class Message:
     role: Role
     content: str
     name: str | None = None
     tool_call: ToolCall | None = None
     call_id: str | None = None
+    tool_result: ToolResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +41,29 @@ class ToolResult:
     content: str
     attempts: int = 1
     duration_ms: float = 0.0
+    data: Any | None = None
+    error: ToolError | None = None
+    truncated: bool = False
+
+    def to_observation(self) -> dict[str, Any]:
+        return {
+            "tool": self.name,
+            "ok": self.ok,
+            "data": self.data if self.ok else None,
+            "error": (
+                {
+                    "code": self.error.code,
+                    "message": self.error.message,
+                    "retryable": self.error.retryable,
+                    "details": dict(self.error.details),
+                }
+                if self.error is not None
+                else None
+            ),
+            "attempts": self.attempts,
+            "duration_ms": self.duration_ms,
+            "truncated": self.truncated,
+        }
 
 
 @dataclass(frozen=True, slots=True)

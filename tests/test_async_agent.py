@@ -73,6 +73,7 @@ class AsyncAgentTests(unittest.IsolatedAsyncioTestCase):
                 SCHEMA,
                 flaky,
                 max_attempts=2,
+                retryable_exceptions=(RuntimeError,),
             )
         )
         result = await registry.execute_async(ToolCall("flaky", {}))
@@ -96,6 +97,8 @@ class AsyncAgentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result.ok)
         self.assertIn("TimeoutError", result.content)
+        self.assertEqual(result.error.code, "TOOL_TIMEOUT")
+        self.assertTrue(result.error.retryable)
 
 
 if __name__ == "__main__":

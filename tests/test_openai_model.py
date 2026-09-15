@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import sys
+import json
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_loop_lab.models import Message, ToolCall
+from agent_loop_lab.models import Message, ToolCall, ToolError, ToolResult
 from agent_loop_lab.openai_model import AsyncOpenAIResponsesModel, OpenAIResponsesModel
 
 
@@ -84,6 +85,35 @@ class OpenAIResponsesModelTests(unittest.TestCase):
         request_input = client.responses.requests[0]["input"]
         self.assertEqual(request_input[1]["type"], "function_call")
         self.assertEqual(request_input[2]["type"], "function_call_output")
+
+    def test_serializes_structured_tool_failure(self) -> None:
+        response = SimpleNamespace(output=[], output_text="done")
+        client = FakeClient(response)
+        model = OpenAIResponsesModel("test-model", client=client)
+        failure = ToolResult(
+            name="calculator",
+            ok=False,
+            content="TimeoutError: slow",
+            attempts=2,
+            error=ToolError("TOOL_TIMEOUT", "TimeoutError: slow", retryable=True),
+        )
+
+        model.respond(
+            [
+                Message(
+                    "tool",
+                    failure.content,
+                    "calculator",
+                    call_id="call_1",
+                    tool_result=failure,
+                )
+            ],
+            [],
+        )
+
+        output = json.loads(client.responses.requests[0]["input"][0]["output"])
+        self.assertEqual(output["error"]["code"], "TOOL_TIMEOUT")
+        self.assertEqual(output["attempts"], 2)
 
     def test_rejects_invalid_arguments_json(self) -> None:
         response = SimpleNamespace(

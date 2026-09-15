@@ -87,11 +87,11 @@ def create_app(
     conversation_store = store if store is not None else InMemoryConversationStore()
     journal = request_journal or InMemoryRequestJournal()
     session_coordinator = coordinator or SessionCoordinator()
-    app = FastAPI(title="agent-loop-lab", version="0.7.0")
+    app = FastAPI(title="agent-loop-lab", version="0.8.0")
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "0.7.0"}
+        return {"status": "ok", "version": "0.8.0"}
 
     @app.post("/v1/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest) -> ChatResponse:

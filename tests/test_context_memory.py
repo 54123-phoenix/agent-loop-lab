@@ -15,6 +15,8 @@ from agent_loop_lab import (
     ConversationConflictError,
     SQLiteConversationStore,
     ToolCall,
+    ToolError,
+    ToolResult,
 )
 
 
@@ -114,6 +116,28 @@ class SQLiteConversationStoreTests(unittest.TestCase):
                     [Message("user", "stale")],
                     expected_version=snapshot.version,
                 )
+
+    def test_structured_tool_result_survives_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteConversationStore(Path(directory) / "history.db")
+            result = ToolResult(
+                "remote_lookup",
+                False,
+                "TimeoutError: slow",
+                attempts=2,
+                error=ToolError("TOOL_TIMEOUT", "TimeoutError: slow", True),
+            )
+            message = Message(
+                "tool",
+                result.content,
+                "remote_lookup",
+                call_id="call_1",
+                tool_result=result,
+            )
+
+            store.save("session", [message])
+
+            self.assertEqual(store.load("session"), (message,))
 
 
 if __name__ == "__main__":

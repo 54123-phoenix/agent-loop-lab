@@ -125,3 +125,14 @@ Added `coordination.py`, versioned conversation snapshots, and API `request_id`.
   running the model or appending messages again.
 - Reusing a `request_id` with different input returns an idempotency conflict.
 - SQLite request journals preserve idempotency records across restarts.
+
+## V0.8: can tool failures be handled as data?
+
+Tool results now retain stable error codes, retryability, attempt count, duration,
+and structured data. The provider receives that structure as JSON instead of
+having to infer failure state from a sentence.
+
+- Only explicitly classified transient exceptions are retried.
+- Non-idempotent tools cannot enable automatic retries.
+- SQLite history preserves the complete structured result.
+- Tool side-effect metadata prepares the next layer's approval boundary.

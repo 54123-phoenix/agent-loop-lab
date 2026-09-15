@@ -8,12 +8,12 @@ import inspect
 import operator
 from dataclasses import dataclass
 from time import perf_counter, sleep
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Literal, Mapping
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from .models import ToolCall, ToolResult
+from .models import ToolCall, ToolError, ToolResult
 
 
 ToolHandler = Callable[[Mapping[str, Any]], str | Awaitable[str]]
@@ -28,6 +28,9 @@ class ToolSpec:
     timeout_seconds: float = 5.0
     max_attempts: int = 1
     retry_backoff_seconds: float = 0.0
+    side_effect: Literal["none", "reversible", "destructive"] = "none"
+    idempotent: bool = True
+    retryable_exceptions: tuple[type[Exception], ...] = (TimeoutError, ConnectionError)
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -38,6 +41,8 @@ class ToolSpec:
             raise ValueError("max_attempts must be at least 1")
         if self.retry_backoff_seconds < 0:
             raise ValueError("retry_backoff_seconds cannot be negative")
+        if self.max_attempts > 1 and not self.idempotent:
+            raise ValueError("Non-idempotent tools cannot enable automatic retries")
         try:
             Draft202012Validator.check_schema(dict(self.parameters))
         except SchemaError as exc:
@@ -88,9 +93,13 @@ class ToolRegistry:
                     str(content),
                     attempts=attempt,
                     duration_ms=(perf_counter() - started) * 1000,
+                    data=content,
                 )
             except Exception as exc:  # Tool failures become observations for the model.
                 last_error = exc
+                error = self._classify_error(prepared, exc)
+                if not error.retryable:
+                    break
                 if (
                     attempt < prepared.max_attempts
                     and prepared.retry_backoff_seconds
@@ -98,12 +107,11 @@ class ToolRegistry:
                     sleep(prepared.retry_backoff_seconds * (2 ** (attempt - 1)))
 
         assert last_error is not None
-        return ToolResult(
+        return self._failure(
             call.name,
-            False,
-            f"{type(last_error).__name__}: {last_error}",
-            attempts=prepared.max_attempts,
-            duration_ms=(perf_counter() - started) * 1000,
+            self._classify_error(prepared, last_error),
+            attempts=attempt,
+            started=started,
         )
 
     async def execute_async(self, call: ToolCall) -> ToolResult:
@@ -125,9 +133,13 @@ class ToolRegistry:
                     str(content),
                     attempts=attempt,
                     duration_ms=(perf_counter() - started) * 1000,
+                    data=content,
                 )
             except Exception as exc:
                 last_error = exc
+                error = self._classify_error(prepared, exc)
+                if not error.retryable:
+                    break
                 if (
                     attempt < prepared.max_attempts
                     and prepared.retry_backoff_seconds
@@ -137,18 +149,21 @@ class ToolRegistry:
                     )
 
         assert last_error is not None
-        return ToolResult(
+        return self._failure(
             call.name,
-            False,
-            f"{type(last_error).__name__}: {last_error}",
-            attempts=prepared.max_attempts,
-            duration_ms=(perf_counter() - started) * 1000,
+            self._classify_error(prepared, last_error),
+            attempts=attempt,
+            started=started,
         )
 
     def _prepare(self, call: ToolCall) -> ToolSpec | ToolResult:
         spec = self._tools.get(call.name)
         if spec is None:
-            return ToolResult(call.name, False, f"Unknown tool: {call.name}")
+            return self._failure(
+                call.name,
+                ToolError("UNKNOWN_TOOL", f"Unknown tool: {call.name}"),
+                attempts=0,
+            )
         try:
             Draft202012Validator(spec.parameters).validate(dict(call.arguments))
         except ValidationError as exc:
@@ -159,12 +174,54 @@ class ToolRegistry:
                     if key not in call.arguments
                 ]
                 return ToolResult(
-                    call.name,
-                    False,
-                    "Missing required arguments: " + ", ".join(missing),
+                    name=call.name,
+                    ok=False,
+                    content="Missing required arguments: " + ", ".join(missing),
+                    attempts=0,
+                    error=ToolError(
+                        "INVALID_ARGUMENT",
+                        "Missing required arguments: " + ", ".join(missing),
+                        details={"missing": missing},
+                    ),
                 )
-            return ToolResult(call.name, False, f"Invalid arguments: {exc.message}")
+            return self._failure(
+                call.name,
+                ToolError(
+                    "INVALID_ARGUMENT",
+                    f"Invalid arguments: {exc.message}",
+                    details={"path": list(exc.absolute_path)},
+                ),
+                attempts=0,
+            )
         return spec
+
+    @staticmethod
+    def _classify_error(spec: ToolSpec, exc: Exception) -> ToolError:
+        retryable = isinstance(exc, spec.retryable_exceptions)
+        code = "TOOL_TIMEOUT" if isinstance(exc, TimeoutError) else "TOOL_EXECUTION_ERROR"
+        return ToolError(
+            code=code,
+            message=f"{type(exc).__name__}: {exc}",
+            retryable=retryable,
+            details={"exception_type": type(exc).__name__},
+        )
+
+    @staticmethod
+    def _failure(
+        name: str,
+        error: ToolError,
+        *,
+        attempts: int,
+        started: float | None = None,
+    ) -> ToolResult:
+        return ToolResult(
+            name=name,
+            ok=False,
+            content=error.message,
+            attempts=attempts,
+            duration_ms=(perf_counter() - started) * 1000 if started else 0.0,
+            error=error,
+        )
 
     @staticmethod
     async def _invoke_async(spec: ToolSpec, call: ToolCall) -> str:

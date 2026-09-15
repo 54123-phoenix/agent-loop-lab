@@ -12,7 +12,7 @@ import sqlite3
 from threading import RLock
 from typing import Iterator, Protocol, Sequence
 
-from .models import Message, ToolCall
+from .models import Message, ToolCall, ToolError, ToolResult
 
 
 class ConversationStore(Protocol):
@@ -278,10 +278,26 @@ class SQLiteConversationStore:
         payload = json.loads(payload_json)
         tool_call_payload = payload.get("tool_call")
         tool_call = ToolCall(**tool_call_payload) if tool_call_payload else None
+        tool_result_payload = payload.get("tool_result")
+        tool_result = None
+        if tool_result_payload:
+            error_payload = tool_result_payload.get("error")
+            error = ToolError(**error_payload) if error_payload else None
+            tool_result = ToolResult(
+                name=tool_result_payload["name"],
+                ok=tool_result_payload["ok"],
+                content=tool_result_payload["content"],
+                attempts=tool_result_payload.get("attempts", 1),
+                duration_ms=tool_result_payload.get("duration_ms", 0.0),
+                data=tool_result_payload.get("data"),
+                error=error,
+                truncated=tool_result_payload.get("truncated", False),
+            )
         return Message(
             role=payload["role"],
             content=payload["content"],
             name=payload.get("name"),
             tool_call=tool_call,
             call_id=payload.get("call_id"),
+            tool_result=tool_result,
         )

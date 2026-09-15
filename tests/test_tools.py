@@ -79,6 +79,7 @@ class ToolTests(unittest.TestCase):
                 },
                 flaky,
                 max_attempts=2,
+                retryable_exceptions=(RuntimeError,),
             )
         )
 
@@ -86,6 +87,40 @@ class ToolTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(result.attempts, 2)
+
+    def test_non_retryable_error_stops_after_one_attempt(self) -> None:
+        attempts = 0
+
+        def broken(arguments):
+            nonlocal attempts
+            del arguments
+            attempts += 1
+            raise RuntimeError("permanent")
+
+        registry = build_default_registry()
+        registry.register(
+            ToolSpec("broken", "Always fails", {"type": "object"}, broken, max_attempts=3)
+        )
+
+        result = registry.execute(ToolCall("broken", {}))
+
+        self.assertFalse(result.ok)
+        self.assertEqual(attempts, 1)
+        self.assertEqual(result.attempts, 1)
+        self.assertEqual(result.error.code, "TOOL_EXECUTION_ERROR")
+        self.assertFalse(result.error.retryable)
+
+    def test_non_idempotent_tool_cannot_retry_automatically(self) -> None:
+        with self.assertRaises(ValueError):
+            ToolSpec(
+                "send_email",
+                "Has an external side effect",
+                {"type": "object"},
+                lambda arguments: "sent",
+                max_attempts=2,
+                idempotent=False,
+                side_effect="destructive",
+            )
 
 
 if __name__ == "__main__":
