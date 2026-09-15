@@ -23,6 +23,7 @@ user message
 | V0.3 | JSONL evaluation cases and metrics | behavior changes become measurable |
 | V0.4 | async loop, timeouts, retries, tracing | slow and transient failures are bounded |
 | V0.5 | FastAPI and bounded session memory | validated HTTP input and controlled context growth |
+| V0.6 | SQLite event history and ContextManager | durable history and token-budgeted model context |
 
 See [docs/VERSIONS.md](docs/VERSIONS.md) for the code path and trade-offs of each
 layer. This is still a learning project rather than a production framework.

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .agent import Agent, AgentRun
 from .async_agent import AsyncAgent
+from .context import ContextBudget, ContextManager
 from .memory import ConversationStore, InMemoryConversationStore
 from .models import Message
 from .openai_model import AsyncOpenAIResponsesModel
@@ -59,11 +60,11 @@ def create_app(
     store: ConversationStore | None = None,
 ) -> FastAPI:
     conversation_store = store if store is not None else InMemoryConversationStore()
-    app = FastAPI(title="agent-loop-lab", version="0.5.0")
+    app = FastAPI(title="agent-loop-lab", version="0.6.0")
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "version": "0.5.0"}
+        return {"status": "ok", "version": "0.6.0"}
 
     @app.post("/v1/chat", response_model=ChatResponse)
     async def chat(request: ChatRequest) -> ChatResponse:
@@ -132,6 +133,7 @@ def _default_agent_factory() -> AsyncAgent:
     return AsyncAgent(
         AsyncOpenAIResponsesModel.from_env(),
         build_default_registry(),
+        context_manager=ContextManager(ContextBudget()),
     )
 
 

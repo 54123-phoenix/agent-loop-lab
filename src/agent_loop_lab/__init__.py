@@ -2,6 +2,13 @@
 
 from .agent import Agent, AgentRun
 from .async_agent import AsyncAgent, AsyncModelAdapter
+from .context import (
+    ApproximateTokenEstimator,
+    ContextBudget,
+    ContextManager,
+    ContextSelection,
+    ExtractiveSummarizer,
+)
 from .evaluation import (
     EvaluationCase,
     EvaluationResult,
@@ -10,7 +17,7 @@ from .evaluation import (
     load_jsonl,
     run_evaluation,
 )
-from .memory import ConversationStore, InMemoryConversationStore
+from .memory import ConversationStore, InMemoryConversationStore, SQLiteConversationStore
 from .models import Message, ModelResponse, ToolCall, ToolResult
 from .tools import ToolRegistry, ToolSpec, build_default_registry
 from .tracing import InMemoryTraceSink, TraceEvent, TraceSink
@@ -20,14 +27,20 @@ __all__ = [
     "AgentRun",
     "AsyncAgent",
     "AsyncModelAdapter",
+    "ApproximateTokenEstimator",
     "ConversationStore",
+    "ContextBudget",
+    "ContextManager",
+    "ContextSelection",
     "EvaluationCase",
     "EvaluationResult",
     "EvaluationSummary",
+    "ExtractiveSummarizer",
     "InMemoryConversationStore",
     "InMemoryTraceSink",
     "Message",
     "ModelResponse",
+    "SQLiteConversationStore",
     "ToolSpec",
     "ToolCall",
     "ToolRegistry",

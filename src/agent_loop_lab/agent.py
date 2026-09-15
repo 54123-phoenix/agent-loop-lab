@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol, Sequence
 from uuid import uuid4
 
+from .context import ContextManager
 from .models import Message, ModelResponse
 from .tools import ToolRegistry
 from .tracing import TraceEvent, TraceSink
@@ -37,6 +38,7 @@ class Agent:
         *,
         max_steps: int = 8,
         tracer: TraceSink | None = None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -44,6 +46,7 @@ class Agent:
         self._tools = tools
         self._max_steps = max_steps
         self._tracer = tracer
+        self._context_manager = context_manager
 
     def run(
         self,
@@ -60,9 +63,27 @@ class Agent:
         self._emit(run_id, "run_started", 0, {"history_messages": len(history)})
 
         for step in range(1, self._max_steps + 1):
-            self._emit(run_id, "model_requested", step, {"messages": len(messages)})
+            schemas = self._tools.schemas()
+            selection = (
+                self._context_manager.build(tuple(messages), schemas)
+                if self._context_manager is not None
+                else None
+            )
+            model_messages = selection.messages if selection is not None else tuple(messages)
+            self._emit(
+                run_id,
+                "model_requested",
+                step,
+                {
+                    "messages": len(model_messages),
+                    "dropped_messages": selection.dropped_messages if selection else 0,
+                    "estimated_input_tokens": (
+                        selection.estimated_input_tokens if selection else None
+                    ),
+                },
+            )
             try:
-                response = self._model.respond(tuple(messages), self._tools.schemas())
+                response = self._model.respond(model_messages, schemas)
             except Exception as exc:
                 self._emit(
                     run_id,

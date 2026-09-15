@@ -98,3 +98,17 @@ deployment boundary   -> Docker image
 That is the main lesson of the version progression: engineering complexity usually
 accumulates around a small piece of business logic, not inside it.
 
+## V0.6: can full history and model context be separated?
+
+Added `context.py` and `SQLiteConversationStore`.
+
+- SQLite keeps the complete append-only message history across process restarts.
+- `ContextManager` selects only the newest complete message/tool units that fit an
+  explicit input budget.
+- Dropped history can be represented by a bounded local summary without deleting
+  the original events.
+- Trace events report selected message count, dropped message count, and estimated
+  input tokens.
+
+The default token estimator is deliberately approximate and dependency-free. A
+provider tokenizer can replace it through the `TokenEstimator` protocol.

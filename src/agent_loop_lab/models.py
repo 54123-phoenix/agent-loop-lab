@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
 
-Role = Literal["user", "assistant", "tool"]
+Role = Literal["system", "developer", "user", "assistant", "tool"]
 
 
 @dataclass(frozen=True, slots=True)

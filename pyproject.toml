@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-loop-lab"
-version = "0.5.0"
+version = "0.6.0"
 description = "A layered Python agent loop for learning, evaluation, and API delivery."
 readme = "README.md"
 requires-python = ">=3.10"
