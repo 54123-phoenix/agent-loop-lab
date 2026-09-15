@@ -26,6 +26,7 @@ user message
 | V0.6 | SQLite event history and ContextManager | durable history and token-budgeted model context |
 | V0.7 | session coordination and request journal | concurrency conflicts and retry duplication |
 | V0.8 | structured tool results and retry policy | stable errors and side-effect-safe retries |
+| V0.9 | parallel tool batches, approvals, and run budgets | bounded cost and controlled side effects |
 
 See [docs/VERSIONS.md](docs/VERSIONS.md) for the code path and trade-offs of each
 layer. This is still a learning project rather than a production framework.
@@ -66,8 +67,9 @@ python examples/real_openai_demo.py
 ```
 
 The adapter sends structured function definitions, preserves function call IDs,
-and feeds function outputs back into the next model request. It disables parallel
-function calls because this teaching loop intentionally handles one call per step.
+and feeds function outputs back into the next model request. Independent function
+calls from one model response run concurrently on the async path while preserving
+their original order.
 
 ## Run the HTTP API
 

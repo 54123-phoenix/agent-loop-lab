@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, Sequence
 
 
 Role = Literal["system", "developer", "user", "assistant", "tool"]
@@ -68,16 +68,20 @@ class ToolResult:
 
 @dataclass(frozen=True, slots=True)
 class ModelResponse:
-    """Exactly one of final_answer and tool_call must be present."""
+    """Exactly one answer, one tool call, or a non-empty call batch is present."""
 
     final_answer: str | None = None
     tool_call: ToolCall | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
 
     def __post_init__(self) -> None:
         has_answer = self.final_answer is not None
         has_call = self.tool_call is not None
-        if has_answer == has_call:
-            raise ValueError("ModelResponse requires exactly one final answer or tool call")
+        has_batch = bool(self.tool_calls)
+        if sum((has_answer, has_call, has_batch)) != 1:
+            raise ValueError(
+                "ModelResponse requires exactly one final answer, tool call, or call batch"
+            )
 
     @classmethod
     def final(cls, answer: str) -> "ModelResponse":
@@ -98,3 +102,15 @@ class ModelResponse:
                 call_id=call_id,
             )
         )
+
+    @classmethod
+    def call_many(cls, calls: Sequence[ToolCall]) -> "ModelResponse":
+        batch = tuple(calls)
+        if not batch:
+            raise ValueError("calls cannot be empty")
+        return cls(tool_calls=batch)
+
+    def requested_tool_calls(self) -> tuple[ToolCall, ...]:
+        if self.tool_call is not None:
+            return (self.tool_call,)
+        return self.tool_calls

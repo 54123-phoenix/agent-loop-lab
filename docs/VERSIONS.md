@@ -136,3 +136,14 @@ having to infer failure state from a sentence.
 - Non-idempotent tools cannot enable automatic retries.
 - SQLite history preserves the complete structured result.
 - Tool side-effect metadata prepares the next layer's approval boundary.
+
+## V0.9: can one run do more work without losing control?
+
+One model step may now request multiple independent tools. The async agent runs
+approved calls concurrently, then returns observations in the model's original
+order.
+
+- `RunBudget` bounds model steps, total tool calls, and wall time.
+- Side-effecting tools are denied by default unless an approval policy allows them.
+- Oversized tool output is truncated before it enters history or model context.
+- A batch that would exceed its tool-call budget is rejected before any handler runs.

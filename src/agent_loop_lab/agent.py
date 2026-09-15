@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from time import perf_counter
 from typing import Protocol, Sequence
 from uuid import uuid4
 
 from .context import ContextManager
+from .guardrails import RunBudget, SafeToolApprovalPolicy, ToolApprovalPolicy
 from .models import Message, ModelResponse
 from .tools import ToolRegistry
 from .tracing import TraceEvent, TraceSink
@@ -39,14 +41,17 @@ class Agent:
         max_steps: int = 8,
         tracer: TraceSink | None = None,
         context_manager: ContextManager | None = None,
+        budget: RunBudget | None = None,
+        approval_policy: ToolApprovalPolicy | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
         self._model = model
         self._tools = tools
-        self._max_steps = max_steps
+        self._budget = budget or RunBudget(max_steps=max_steps)
         self._tracer = tracer
         self._context_manager = context_manager
+        self._approval_policy = approval_policy or SafeToolApprovalPolicy()
 
     def run(
         self,
@@ -61,8 +66,20 @@ class Agent:
         messages = list(history)
         messages.append(Message(role="user", content=user_input.strip()))
         self._emit(run_id, "run_started", 0, {"history_messages": len(history)})
+        started = perf_counter()
+        tool_calls_used = 0
 
-        for step in range(1, self._max_steps + 1):
+        for step in range(1, self._budget.max_steps + 1):
+            if perf_counter() - started >= self._budget.max_wall_time_seconds:
+                self._emit(run_id, "run_finished", step - 1, {"reason": "time_budget"})
+                return AgentRun(
+                    None,
+                    tuple(messages),
+                    step - 1,
+                    "time_budget",
+                    run_id,
+                    "Run exceeded its wall-time budget",
+                )
             schemas = self._tools.schemas()
             selection = (
                 self._context_manager.build(tuple(messages), schemas)
@@ -104,51 +121,77 @@ class Agent:
                     run_id=run_id,
                 )
 
-            call = response.tool_call
-            if call is None:  # Defensive guard; ModelResponse also enforces this.
+            calls = response.requested_tool_calls()
+            if not calls:
                 raise RuntimeError("Model returned neither an answer nor a tool call")
-
-            if call.call_id is None:
-                from dataclasses import replace
-
-                call = replace(call, call_id=f"call_{run_id}_{step}")
-
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=f"tool_call:{call.name} arguments={dict(call.arguments)!r}",
-                    tool_call=call,
-                    call_id=call.call_id,
+            if tool_calls_used + len(calls) > self._budget.max_tool_calls:
+                self._emit(run_id, "run_finished", step, {"reason": "max_tool_calls"})
+                return AgentRun(
+                    None,
+                    tuple(messages),
+                    step,
+                    "max_tool_calls",
+                    run_id,
+                    "Run exceeded its tool-call budget",
                 )
-            )
-            self._emit(run_id, "tool_started", step, {"tool": call.name})
-            result = self._tools.execute(call)
-            messages.append(
-                Message(
-                    role="tool",
-                    name=result.name,
-                    content=f"ok={result.ok} content={result.content}",
-                    call_id=call.call_id,
-                    tool_result=result,
-                )
-            )
-            self._emit(
-                run_id,
-                "tool_finished",
-                step,
-                {
-                    "tool": result.name,
-                    "ok": result.ok,
-                    "attempts": result.attempts,
-                    "duration_ms": result.duration_ms,
-                },
-            )
+            tool_calls_used += len(calls)
 
-        self._emit(run_id, "run_finished", self._max_steps, {"reason": "max_steps"})
+            for index, original_call in enumerate(calls, start=1):
+                call = original_call
+                if call.call_id is None:
+                    call = replace(call, call_id=f"call_{run_id}_{step}_{index}")
+                messages.append(
+                    Message(
+                        role="assistant",
+                        content=f"tool_call:{call.name} arguments={dict(call.arguments)!r}",
+                        tool_call=call,
+                        call_id=call.call_id,
+                    )
+                )
+                spec = self._tools.get(call.name)
+                approved = spec is None or self._approval_policy.approve(call, spec)
+                self._emit(
+                    run_id,
+                    "tool_started",
+                    step,
+                    {"tool": call.name, "approved": approved},
+                )
+                result = (
+                    self._tools.execute(call)
+                    if approved
+                    else self._tools.approval_required(call.name)
+                )
+                messages.append(
+                    Message(
+                        role="tool",
+                        name=result.name,
+                        content=f"ok={result.ok} content={result.content}",
+                        call_id=call.call_id,
+                        tool_result=result,
+                    )
+                )
+                self._emit(
+                    run_id,
+                    "tool_finished",
+                    step,
+                    {
+                        "tool": result.name,
+                        "ok": result.ok,
+                        "attempts": result.attempts,
+                        "duration_ms": result.duration_ms,
+                    },
+                )
+
+        self._emit(
+            run_id,
+            "run_finished",
+            self._budget.max_steps,
+            {"reason": "max_steps"},
+        )
         return AgentRun(
             answer=None,
             messages=tuple(messages),
-            steps=self._max_steps,
+            steps=self._budget.max_steps,
             stop_reason="max_steps",
             run_id=run_id,
         )

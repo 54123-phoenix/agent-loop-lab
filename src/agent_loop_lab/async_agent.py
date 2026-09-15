@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from time import perf_counter
 from typing import Protocol, Sequence
 from uuid import uuid4
 
 from .agent import AgentRun
 from .context import ContextManager
+from .guardrails import RunBudget, SafeToolApprovalPolicy, ToolApprovalPolicy
 from .models import Message, ModelResponse
 from .tools import ToolRegistry
 from .tracing import TraceEvent, TraceSink
@@ -32,6 +34,8 @@ class AsyncAgent:
         model_timeout_seconds: float = 30.0,
         tracer: TraceSink | None = None,
         context_manager: ContextManager | None = None,
+        budget: RunBudget | None = None,
+        approval_policy: ToolApprovalPolicy | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -39,10 +43,11 @@ class AsyncAgent:
             raise ValueError("model_timeout_seconds must be positive")
         self._model = model
         self._tools = tools
-        self._max_steps = max_steps
+        self._budget = budget or RunBudget(max_steps=max_steps)
         self._model_timeout_seconds = model_timeout_seconds
         self._tracer = tracer
         self._context_manager = context_manager
+        self._approval_policy = approval_policy or SafeToolApprovalPolicy()
 
     async def run(
         self,
@@ -57,8 +62,20 @@ class AsyncAgent:
         messages = list(history)
         messages.append(Message(role="user", content=user_input.strip()))
         self._emit(run_id, "run_started", 0, {"history_messages": len(history)})
+        started = perf_counter()
+        tool_calls_used = 0
 
-        for step in range(1, self._max_steps + 1):
+        for step in range(1, self._budget.max_steps + 1):
+            if perf_counter() - started >= self._budget.max_wall_time_seconds:
+                self._emit(run_id, "run_finished", step - 1, {"reason": "time_budget"})
+                return AgentRun(
+                    None,
+                    tuple(messages),
+                    step - 1,
+                    "time_budget",
+                    run_id,
+                    "Run exceeded its wall-time budget",
+                )
             schemas = self._tools.schemas()
             selection = (
                 self._context_manager.build(tuple(messages), schemas)
@@ -117,48 +134,84 @@ class AsyncAgent:
                     run_id,
                 )
 
-            call = response.tool_call
-            if call is None:
+            calls = response.requested_tool_calls()
+            if not calls:
                 raise RuntimeError("Model returned neither an answer nor a tool call")
-            if call.call_id is None:
-                call = replace(call, call_id=f"call_{run_id}_{step}")
-
-            messages.append(
-                Message(
-                    role="assistant",
-                    content=f"tool_call:{call.name} arguments={dict(call.arguments)!r}",
-                    tool_call=call,
-                    call_id=call.call_id,
+            if tool_calls_used + len(calls) > self._budget.max_tool_calls:
+                self._emit(run_id, "run_finished", step, {"reason": "max_tool_calls"})
+                return AgentRun(
+                    None,
+                    tuple(messages),
+                    step,
+                    "max_tool_calls",
+                    run_id,
+                    "Run exceeded its tool-call budget",
                 )
-            )
-            self._emit(run_id, "tool_started", step, {"tool": call.name})
-            result = await self._tools.execute_async(call)
-            messages.append(
-                Message(
-                    role="tool",
-                    name=result.name,
-                    content=f"ok={result.ok} content={result.content}",
-                    call_id=call.call_id,
-                    tool_result=result,
-                )
-            )
-            self._emit(
-                run_id,
-                "tool_finished",
-                step,
-                {
-                    "tool": result.name,
-                    "ok": result.ok,
-                    "attempts": result.attempts,
-                    "duration_ms": result.duration_ms,
-                },
-            )
+            tool_calls_used += len(calls)
 
-        self._emit(run_id, "run_finished", self._max_steps, {"reason": "max_steps"})
+            prepared_calls = []
+            approved_calls = []
+            approval_results = {}
+            for index, original_call in enumerate(calls, start=1):
+                call = original_call
+                if call.call_id is None:
+                    call = replace(call, call_id=f"call_{run_id}_{step}_{index}")
+                prepared_calls.append(call)
+                spec = self._tools.get(call.name)
+                approved = spec is None or self._approval_policy.approve(call, spec)
+                self._emit(
+                    run_id,
+                    "tool_started",
+                    step,
+                    {"tool": call.name, "approved": approved},
+                )
+                if approved:
+                    approved_calls.append(call)
+                else:
+                    approval_results[call.call_id] = self._tools.approval_required(call.name)
+
+            executed = iter(await self._tools.execute_many_async(approved_calls))
+            for call in prepared_calls:
+                result = approval_results.get(call.call_id) or next(executed)
+                messages.append(
+                    Message(
+                        role="assistant",
+                        content=f"tool_call:{call.name} arguments={dict(call.arguments)!r}",
+                        tool_call=call,
+                        call_id=call.call_id,
+                    )
+                )
+                messages.append(
+                    Message(
+                        role="tool",
+                        name=result.name,
+                        content=f"ok={result.ok} content={result.content}",
+                        call_id=call.call_id,
+                        tool_result=result,
+                    )
+                )
+                self._emit(
+                    run_id,
+                    "tool_finished",
+                    step,
+                    {
+                        "tool": result.name,
+                        "ok": result.ok,
+                        "attempts": result.attempts,
+                        "duration_ms": result.duration_ms,
+                    },
+                )
+
+        self._emit(
+            run_id,
+            "run_finished",
+            self._budget.max_steps,
+            {"reason": "max_steps"},
+        )
         return AgentRun(
             None,
             tuple(messages),
-            self._max_steps,
+            self._budget.max_steps,
             "max_steps",
             run_id,
         )

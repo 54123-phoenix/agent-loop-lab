@@ -59,7 +59,34 @@ class OpenAIResponsesModelTests(unittest.TestCase):
         self.assertEqual(result.tool_call.name, "calculator")
         self.assertEqual(result.tool_call.arguments, {"expression": "6 * 7"})
         self.assertEqual(result.tool_call.call_id, "call_123")
-        self.assertFalse(client.responses.requests[0]["parallel_tool_calls"])
+        self.assertTrue(client.responses.requests[0]["parallel_tool_calls"])
+
+    def test_parses_multiple_function_calls(self) -> None:
+        response = SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="function_call",
+                    name="calculator",
+                    call_id="call_1",
+                    arguments='{"expression":"1 + 1"}',
+                ),
+                SimpleNamespace(
+                    type="function_call",
+                    name="word_count",
+                    call_id="call_2",
+                    arguments='{"text":"one two"}',
+                ),
+            ],
+            output_text="",
+        )
+        model = OpenAIResponsesModel("test-model", client=FakeClient(response))
+
+        result = model.respond([Message("user", "two tasks")], [])
+
+        self.assertEqual(
+            [call.name for call in result.tool_calls],
+            ["calculator", "word_count"],
+        )
 
     def test_parses_final_text(self) -> None:
         response = SimpleNamespace(output=[], output_text="  done  ")

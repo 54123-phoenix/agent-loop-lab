@@ -122,6 +122,24 @@ class ToolTests(unittest.TestCase):
                 side_effect="destructive",
             )
 
+    def test_tool_output_is_truncated_at_its_boundary(self) -> None:
+        registry = build_default_registry()
+        registry.register(
+            ToolSpec(
+                "verbose",
+                "Produces too much data",
+                {"type": "object"},
+                lambda arguments: "abcdefghij",
+                max_output_chars=5,
+            )
+        )
+
+        result = registry.execute(ToolCall("verbose", {}))
+
+        self.assertEqual(result.content, "abcd…")
+        self.assertTrue(result.truncated)
+        self.assertEqual(result.data, "abcd…")
+
 
 if __name__ == "__main__":
     unittest.main()

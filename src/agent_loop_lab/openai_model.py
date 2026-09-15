@@ -53,7 +53,7 @@ class OpenAIResponsesModel:
             "model": self._model,
             "input": self._to_input(messages),
             "tools": list(tools),
-            "parallel_tool_calls": False,
+            "parallel_tool_calls": True,
         }
         if self._instructions:
             request["instructions"] = self._instructions
@@ -63,6 +63,7 @@ class OpenAIResponsesModel:
 
     @staticmethod
     def _parse_response(response: Any) -> ModelResponse:
+        calls = []
         for item in getattr(response, "output", ()):
             if OpenAIResponsesModel._get(item, "type") != "function_call":
                 continue
@@ -79,7 +80,12 @@ class OpenAIResponsesModel:
                 raise RuntimeError("Model returned invalid tool arguments JSON") from exc
             if not isinstance(arguments, dict):
                 raise RuntimeError("Model tool arguments must decode to an object")
-            return ModelResponse.call(name, arguments, call_id=call_id)
+            calls.append(ModelResponse.call(name, arguments, call_id=call_id).tool_call)
+
+        if len(calls) == 1:
+            return ModelResponse(tool_call=calls[0])
+        if calls:
+            return ModelResponse.call_many(calls)
 
         output_text = str(getattr(response, "output_text", "")).strip()
         if not output_text:
@@ -178,7 +184,7 @@ class AsyncOpenAIResponsesModel:
             "model": self._model,
             "input": OpenAIResponsesModel._to_input(messages),
             "tools": list(tools),
-            "parallel_tool_calls": False,
+            "parallel_tool_calls": True,
         }
         if self._instructions:
             request["instructions"] = self._instructions

@@ -16,7 +16,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from .models import ToolCall, ToolError, ToolResult
 
 
-ToolHandler = Callable[[Mapping[str, Any]], str | Awaitable[str]]
+ToolHandler = Callable[[Mapping[str, Any]], Any | Awaitable[Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +31,7 @@ class ToolSpec:
     side_effect: Literal["none", "reversible", "destructive"] = "none"
     idempotent: bool = True
     retryable_exceptions: tuple[type[Exception], ...] = (TimeoutError, ConnectionError)
+    max_output_chars: int = 16_000
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -43,6 +44,8 @@ class ToolSpec:
             raise ValueError("retry_backoff_seconds cannot be negative")
         if self.max_attempts > 1 and not self.idempotent:
             raise ValueError("Non-idempotent tools cannot enable automatic retries")
+        if self.max_output_chars < 1:
+            raise ValueError("max_output_chars must be positive")
         try:
             Draft202012Validator.check_schema(dict(self.parameters))
         except SchemaError as exc:
@@ -70,6 +73,9 @@ class ToolRegistry:
     def schemas(self) -> list[dict[str, Any]]:
         return [self._tools[name].schema() for name in sorted(self._tools)]
 
+    def get(self, name: str) -> ToolSpec | None:
+        return self._tools.get(name)
+
     def execute(self, call: ToolCall) -> ToolResult:
         prepared = self._prepare(call)
         if isinstance(prepared, ToolResult):
@@ -87,14 +93,7 @@ class ToolRegistry:
                     if close is not None:
                         close()
                     raise TypeError("Async tool handlers require execute_async()")
-                return ToolResult(
-                    call.name,
-                    True,
-                    str(content),
-                    attempts=attempt,
-                    duration_ms=(perf_counter() - started) * 1000,
-                    data=content,
-                )
+                return self._success(call.name, prepared, content, attempt, started)
             except Exception as exc:  # Tool failures become observations for the model.
                 last_error = exc
                 error = self._classify_error(prepared, exc)
@@ -127,14 +126,7 @@ class ToolRegistry:
                     self._invoke_async(prepared, call),
                     timeout=prepared.timeout_seconds,
                 )
-                return ToolResult(
-                    call.name,
-                    True,
-                    str(content),
-                    attempts=attempt,
-                    duration_ms=(perf_counter() - started) * 1000,
-                    data=content,
-                )
+                return self._success(call.name, prepared, content, attempt, started)
             except Exception as exc:
                 last_error = exc
                 error = self._classify_error(prepared, exc)
@@ -154,6 +146,26 @@ class ToolRegistry:
             self._classify_error(prepared, last_error),
             attempts=attempt,
             started=started,
+        )
+
+    async def execute_many_async(
+        self,
+        calls: list[ToolCall] | tuple[ToolCall, ...],
+    ) -> tuple[ToolResult, ...]:
+        """Execute an independent batch concurrently while preserving input order."""
+
+        return tuple(await asyncio.gather(*(self.execute_async(call) for call in calls)))
+
+    @staticmethod
+    def approval_required(name: str) -> ToolResult:
+        return ToolRegistry._failure(
+            name,
+            ToolError(
+                "APPROVAL_REQUIRED",
+                f"Tool requires explicit approval: {name}",
+                details={"tool": name},
+            ),
+            attempts=0,
         )
 
     def _prepare(self, call: ToolCall) -> ToolSpec | ToolResult:
@@ -207,6 +219,28 @@ class ToolRegistry:
         )
 
     @staticmethod
+    def _success(
+        name: str,
+        spec: ToolSpec,
+        data: Any,
+        attempts: int,
+        started: float,
+    ) -> ToolResult:
+        content = str(data)
+        truncated = len(content) > spec.max_output_chars
+        if truncated:
+            content = content[: max(0, spec.max_output_chars - 1)].rstrip() + "…"
+        return ToolResult(
+            name=name,
+            ok=True,
+            content=content,
+            attempts=attempts,
+            duration_ms=(perf_counter() - started) * 1000,
+            data=content if truncated else data,
+            truncated=truncated,
+        )
+
+    @staticmethod
     def _failure(
         name: str,
         error: ToolError,
@@ -224,7 +258,7 @@ class ToolRegistry:
         )
 
     @staticmethod
-    async def _invoke_async(spec: ToolSpec, call: ToolCall) -> str:
+    async def _invoke_async(spec: ToolSpec, call: ToolCall) -> Any:
         if inspect.iscoroutinefunction(spec.handler):
             return await spec.handler(call.arguments)
         content = await asyncio.to_thread(spec.handler, call.arguments)
