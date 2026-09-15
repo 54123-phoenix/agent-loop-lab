@@ -1,51 +1,47 @@
-"""A framework-free agent loop with explicit stop conditions."""
+"""Async agent loop with model/tool timeouts and the same message contract."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import replace
 from typing import Protocol, Sequence
 from uuid import uuid4
 
+from .agent import AgentRun
 from .models import Message, ModelResponse
 from .tools import ToolRegistry
 from .tracing import TraceEvent, TraceSink
 
 
-class ModelAdapter(Protocol):
-    def respond(
+class AsyncModelAdapter(Protocol):
+    async def respond(
         self,
         messages: Sequence[Message],
         tools: Sequence[dict[str, object]],
     ) -> ModelResponse: ...
 
 
-@dataclass(frozen=True, slots=True)
-class AgentRun:
-    answer: str | None
-    messages: tuple[Message, ...]
-    steps: int
-    stop_reason: str
-    run_id: str = ""
-    error: str | None = None
-
-
-class Agent:
+class AsyncAgent:
     def __init__(
         self,
-        model: ModelAdapter,
+        model: AsyncModelAdapter,
         tools: ToolRegistry,
         *,
         max_steps: int = 8,
+        model_timeout_seconds: float = 30.0,
         tracer: TraceSink | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
+        if model_timeout_seconds <= 0:
+            raise ValueError("model_timeout_seconds must be positive")
         self._model = model
         self._tools = tools
         self._max_steps = max_steps
+        self._model_timeout_seconds = model_timeout_seconds
         self._tracer = tracer
 
-    def run(
+    async def run(
         self,
         user_input: str,
         *,
@@ -62,34 +58,48 @@ class Agent:
         for step in range(1, self._max_steps + 1):
             self._emit(run_id, "model_requested", step, {"messages": len(messages)})
             try:
-                response = self._model.respond(tuple(messages), self._tools.schemas())
-            except Exception as exc:
-                self._emit(
-                    run_id,
-                    "run_finished",
-                    step,
-                    {"reason": "model_error", "error_type": type(exc).__name__},
+                response = await asyncio.wait_for(
+                    self._model.respond(tuple(messages), self._tools.schemas()),
+                    timeout=self._model_timeout_seconds,
                 )
-                raise
+            except TimeoutError:
+                error = f"Model timed out after {self._model_timeout_seconds:g}s"
+                self._emit(run_id, "run_finished", step, {"reason": "model_timeout"})
+                return AgentRun(
+                    None,
+                    tuple(messages),
+                    step,
+                    "model_timeout",
+                    run_id,
+                    error,
+                )
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                self._emit(run_id, "run_finished", step, {"reason": "model_error"})
+                return AgentRun(
+                    None,
+                    tuple(messages),
+                    step,
+                    "model_error",
+                    run_id,
+                    error,
+                )
 
             if response.final_answer is not None:
                 messages.append(Message(role="assistant", content=response.final_answer))
                 self._emit(run_id, "run_finished", step, {"reason": "final_answer"})
                 return AgentRun(
-                    answer=response.final_answer,
-                    messages=tuple(messages),
-                    steps=step,
-                    stop_reason="final_answer",
-                    run_id=run_id,
+                    response.final_answer,
+                    tuple(messages),
+                    step,
+                    "final_answer",
+                    run_id,
                 )
 
             call = response.tool_call
-            if call is None:  # Defensive guard; ModelResponse also enforces this.
+            if call is None:
                 raise RuntimeError("Model returned neither an answer nor a tool call")
-
             if call.call_id is None:
-                from dataclasses import replace
-
                 call = replace(call, call_id=f"call_{run_id}_{step}")
 
             messages.append(
@@ -101,7 +111,7 @@ class Agent:
                 )
             )
             self._emit(run_id, "tool_started", step, {"tool": call.name})
-            result = self._tools.execute(call)
+            result = await self._tools.execute_async(call)
             messages.append(
                 Message(
                     role="tool",
@@ -124,11 +134,11 @@ class Agent:
 
         self._emit(run_id, "run_finished", self._max_steps, {"reason": "max_steps"})
         return AgentRun(
-            answer=None,
-            messages=tuple(messages),
-            steps=self._max_steps,
-            stop_reason="max_steps",
-            run_id=run_id,
+            None,
+            tuple(messages),
+            self._max_steps,
+            "max_steps",
+            run_id,
         )
 
     def _emit(
@@ -140,3 +150,4 @@ class Agent:
     ) -> None:
         if self._tracer is not None:
             self._tracer.emit(TraceEvent(run_id, kind, step, details))
+

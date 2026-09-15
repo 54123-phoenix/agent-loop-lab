@@ -1,38 +1,70 @@
 # Design notes
 
-## Why this repository exists
+## Purpose
 
-This project is a learning baseline, not a production agent framework. Its goal is to make the loop visible and testable before adding an external LLM SDK or framework.
+This repository is a learning baseline that keeps the central agent loop visible.
+Each later version adds one engineering pressure around that loop instead of
+replacing it with a framework.
 
-## Current flow
+## Runtime data path
 
 ```text
-User message
-  → model adapter
-  → final answer ───────────────→ stop
-  → tool call
-      → registry validation
-      → tool execution
-      → observation appended
-      → next model step
-  → max_steps reached ──────────→ stop without an answer
+caller
+  -> Agent.run(user_input, optional history)
+  -> ModelAdapter.respond(messages, tool schemas)
+     -> final answer -> AgentRun
+     -> ToolCall
+        -> ToolRegistry JSON Schema validation
+        -> handler execution
+        -> ToolResult
+        -> tool Message with call_id
+        -> next model step
+  -> max_steps -> AgentRun(answer=None)
 ```
 
-## Decisions
+The async path mirrors the same flow but bounds model and tool execution with
+timeouts. Tools may retry using exponential backoff. The HTTP service uses this
+async path. Trace events expose run, model, and tool boundaries without coupling
+the loop to a logging vendor.
 
-1. **No LLM API in V0.1.** A deterministic scripted model makes loop behavior reproducible and keeps secrets out of the first commit.
-2. **Explicit response contract.** A model response must contain exactly one final answer or one tool call.
-3. **Tool failures are observations.** Unknown tools, missing arguments, and handler errors are returned to the loop instead of crashing it.
-4. **A hard step limit exists.** Repeated tool calls stop with `max_steps`; the program does not pretend it produced a final answer.
-5. **The calculator parses an AST.** It does not use `eval`, and it rejects names, calls, and unsupported nodes.
+## Contract decisions
 
-## Known limitations
+1. `ModelResponse` contains exactly one final answer or one tool call.
+2. `ToolCall` and tool messages retain `call_id`, so a provider can pair a
+   function result with the original request.
+3. Tool arguments are validated before handlers run. Validation failures and
+   handler failures become observations rather than process crashes.
+4. Messages and result contracts are frozen data classes. The loop owns a mutable
+   list internally and returns an immutable tuple.
+5. Provider, trace, and memory components sit behind small protocols.
+6. The API validates external input and does not return raw upstream exceptions.
 
-- No real LLM adapter or structured provider response parser.
-- Tool schemas are deliberately minimal and do not yet use JSON Schema.
-- No async tools, retries, timeouts, tracing, persistence, approval gates, or token budget.
-- Tests validate deterministic behavior, not answer correctness from a live model.
+## Context and memory
 
-## Next version
+`Agent.run(..., history=...)` accepts prior messages but does not own persistence.
+`InMemoryConversationStore` provides a process-local LRU session store with both a
+session cap and a message cap. Orphaned function outputs are removed when a context
+window cuts off the matching function call.
 
-V0.2 should add one real provider adapter behind the same protocol, JSON Schema tool contracts, timeouts, and a versioned evaluation dataset.
+This is short-term conversation state, not semantic long-term memory. A production
+implementation would replace the store protocol with durable storage and add
+summarization or retrieval before the model request.
+
+## OpenAI adapter
+
+`OpenAIResponsesModel` translates local messages into Responses API input items.
+Assistant tool calls become `function_call` items and tool observations become
+`function_call_output` items. The adapter parses either the first function call or
+the response's output text into the framework-neutral `ModelResponse` contract.
+
+## Remaining limitations
+
+- no persistent database or distributed session coordination;
+- no per-session concurrency control, so overlapping writes can lose an update;
+- no auth, quotas, rate limiting, or tenant isolation;
+- no parallel custom tool execution;
+- no streaming responses;
+- no cancellation of already-running synchronous thread work after an async
+  timeout;
+- no live-model scoring, judge model, or statistical evaluation;
+- no OpenTelemetry exporter or production deployment manifest.

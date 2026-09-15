@@ -1,0 +1,3 @@
+{"case_id":"direct-answer","prompt":"Reply with done","expected_answer":"done","expected_tools":[]}
+{"case_id":"calculator","prompt":"Calculate 6 * 7","expected_answer":"The result is 42.","expected_tools":["calculator"]}
+{"case_id":"unknown-tool","prompt":"Use a missing tool","expected_answer":"I could not use that tool.","expected_tools":["missing"]}

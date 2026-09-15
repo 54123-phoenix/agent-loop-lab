@@ -23,3 +23,20 @@ class ScriptedModel:
         if not self._responses:
             raise RuntimeError("ScriptedModel has no responses left")
         return self._responses.popleft()
+
+
+class AsyncScriptedModel:
+    """Async counterpart used to test AsyncAgent without network access."""
+
+    def __init__(self, responses: Iterable[ModelResponse]) -> None:
+        self._responses = deque(responses)
+
+    async def respond(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[dict[str, object]],
+    ) -> ModelResponse:
+        del messages, tools
+        if not self._responses:
+            raise RuntimeError("AsyncScriptedModel has no responses left")
+        return self._responses.popleft()

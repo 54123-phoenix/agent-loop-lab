@@ -1,78 +1,115 @@
 # agent-loop-lab
 
-A minimal, framework-free Python agent loop built to make **tool calling, observations, stop conditions, and failures** explicit.
+A small Python agent loop that grows in visible layers from a deterministic V0.1
+learning scaffold to a guarded V0.5 HTTP service.
 
-> Status: V0.1 learning scaffold. It uses a deterministic scripted model, not a live LLM. Local verification: **11/11 tests passed on Python 3.11.9**.
-
-## Why
-
-Agent frameworks hide useful details. This repository starts with the smallest inspectable loop, then adds engineering features only when each one can be explained and tested.
-
-## Current scope
-
-- explicit `final_answer` versus `tool_call` response contract;
-- tool registry with unknown-tool and missing-argument handling;
-- calculator and word-count example tools;
-- tool observations appended to message history;
-- hard `max_steps` stop condition;
-- deterministic model adapter for reproducible tests;
-- standard-library unit tests and no runtime dependencies.
-
-Not included yet: live LLM APIs, RAG, memory persistence, async execution, approvals, tracing, FastAPI, or deployment.
-
-## Architecture
+The original loop is still the center of the project:
 
 ```text
-User input
-   ↓
-Agent.run
-   ↓
-ModelAdapter.respond ──→ final answer ──→ stop
-   │
-   └─→ tool call → ToolRegistry → ToolResult/Observation
-                                └───────────────→ next step
+user message
+  -> model decision
+  -> final answer -----------------------> stop
+  -> tool call -> validation -> execution
+              -> observation ------------> next model step
+  -> max_steps --------------------------> stop without an answer
 ```
 
-See [docs/DESIGN.md](docs/DESIGN.md) for decisions and limitations.
+## Version layers
 
-## Run the demo
+| Version | Added layer | Main protection |
+| --- | --- | --- |
+| V0.1 | deterministic loop and two tools | explicit stop conditions |
+| V0.2 | OpenAI Responses adapter and JSON Schema | provider boundary and strict tool input |
+| V0.3 | JSONL evaluation cases and metrics | behavior changes become measurable |
+| V0.4 | async loop, timeouts, retries, tracing | slow and transient failures are bounded |
+| V0.5 | FastAPI and bounded session memory | validated HTTP input and controlled context growth |
+
+See [docs/VERSIONS.md](docs/VERSIONS.md) for the code path and trade-offs of each
+layer. This is still a learning project rather than a production framework.
+
+## Install
+
+Core loop only:
+
+```bash
+python -m pip install -e .
+```
+
+Full project, API, and test dependencies:
+
+```bash
+python -m pip install -e ".[api,dev]"
+```
+
+## Run deterministic examples
 
 ```bash
 python examples/demo.py
-```
-
-Expected final lines:
-
-```text
-[assistant] 6 × 7 = 42
-stop_reason=final_answer, steps=2
-```
-
-## Run tests
-
-```bash
+python examples/run_evals.py
 python -m unittest discover -s tests -v
 ```
 
-Verified on 2026-09-08 with Python 3.11.9: **11 tests passed**. The demo completed in two steps and stopped with `final_answer`.
+These commands do not make network requests and do not require an API key.
 
-## Learning questions this V0.1 answers
+## Run with the OpenAI Responses API
 
-1. Why is an agent a loop?
-2. How are tools described to the model?
-3. What can the model return?
-4. How does code distinguish an answer from a tool call?
-5. Where does the observation go?
-6. Why and when does the loop stop?
+Copy `.env.example` values into your environment and set real values without
+committing them:
 
-## Roadmap
+```bash
+set OPENAI_API_KEY=your-key
+set OPENAI_MODEL=a-model-available-to-your-project
+python examples/real_openai_demo.py
+```
 
-- [x] V0.1: deterministic loop, two tools, errors, stop condition, tests
-- [ ] V0.2: real LLM adapter + JSON Schema tool contracts
-- [ ] V0.3: evaluation dataset and metrics
-- [ ] V0.4: async tools, retries, timeouts, tracing
-- [ ] V0.5: FastAPI interface and deployment
+The adapter sends structured function definitions, preserves function call IDs,
+and feeds function outputs back into the next model request. It disables parallel
+function calls because this teaching loop intentionally handles one call per step.
 
-## Honesty statement
+## Run the HTTP API
 
-This is a learning project. Features are marked complete only after they have runnable code and verification. Reference repositories may inform later iterations, but their implementation and results are not presented as this project's work.
+```bash
+uvicorn agent_loop_lab.api:app --host 127.0.0.1 --port 8000
+```
+
+Example request:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/v1/chat `
+  -ContentType "application/json" `
+  -Body '{"session_id":"demo","message":"Calculate 6 * 7"}'
+```
+
+Endpoints:
+
+- `GET /health`
+- `POST /v1/chat`
+- `GET /v1/sessions/{session_id}`
+- `DELETE /v1/sessions/{session_id}`
+
+Session memory is deliberately process-local and bounded. It demonstrates context
+management but is not durable storage and has no authentication. Do not expose this
+learning service directly to the public internet.
+
+## Docker
+
+```bash
+docker build -t agent-loop-lab .
+docker run --rm -p 8000:8000 \
+  -e OPENAI_API_KEY \
+  -e OPENAI_MODEL \
+  agent-loop-lab
+```
+
+## Current boundaries
+
+- One custom function call is handled per model step.
+- Sync tools retry; the HTTP service uses the async path so model and tool timeouts
+  are enforceable at its request boundary.
+- Session memory is an in-process LRU window, not a database or semantic memory.
+- Concurrent requests for the same session are not serialized and can overwrite
+  each other's in-memory history.
+- There is no authentication, rate limiting, distributed tracing, streaming, or
+  production secret manager.
+- The deterministic evaluation set checks contracts and regressions; it does not
+  establish live-model quality.

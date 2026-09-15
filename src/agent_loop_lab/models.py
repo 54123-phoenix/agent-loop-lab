@@ -10,16 +10,19 @@ Role = Literal["user", "assistant", "tool"]
 
 
 @dataclass(frozen=True, slots=True)
+class ToolCall:
+    name: str
+    arguments: Mapping[str, Any] = field(default_factory=dict)
+    call_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Message:
     role: Role
     content: str
     name: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ToolCall:
-    name: str
-    arguments: Mapping[str, Any] = field(default_factory=dict)
+    tool_call: ToolCall | None = None
+    call_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +30,8 @@ class ToolResult:
     name: str
     ok: bool
     content: str
+    attempts: int = 1
+    duration_ms: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,5 +52,17 @@ class ModelResponse:
         return cls(final_answer=answer)
 
     @classmethod
-    def call(cls, name: str, arguments: Mapping[str, Any]) -> "ModelResponse":
-        return cls(tool_call=ToolCall(name=name, arguments=arguments))
+    def call(
+        cls,
+        name: str,
+        arguments: Mapping[str, Any],
+        *,
+        call_id: str | None = None,
+    ) -> "ModelResponse":
+        return cls(
+            tool_call=ToolCall(
+                name=name,
+                arguments=arguments,
+                call_id=call_id,
+            )
+        )

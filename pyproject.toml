@@ -1,15 +1,20 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel>=0.41"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-loop-lab"
-version = "0.1.0"
-description = "A minimal, framework-free Python agent loop for learning and evaluation."
+version = "0.5.0"
+description = "A layered Python agent loop for learning, evaluation, and API delivery."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Phoenix" }]
-dependencies = []
+dependencies = ["jsonschema>=4.18,<5"]
+
+[project.optional-dependencies]
+openai = ["openai>=2,<3"]
+api = ["openai>=2,<3", "fastapi>=0.115,<1", "uvicorn[standard]>=0.30,<1"]
+dev = ["httpx2>=2,<3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

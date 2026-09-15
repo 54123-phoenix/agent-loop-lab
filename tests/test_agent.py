@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_loop_lab import Agent, ModelResponse, build_default_registry
+from agent_loop_lab import Agent, InMemoryTraceSink, Message, ModelResponse, build_default_registry
 from agent_loop_lab.mock_model import ScriptedModel
 
 
@@ -72,6 +72,28 @@ class AgentTests(unittest.TestCase):
         model = ScriptedModel([ModelResponse.final("unused")])
         with self.assertRaises(ValueError):
             Agent(model, build_default_registry()).run("   ")
+
+    def test_accepts_prior_conversation_history(self) -> None:
+        model = ScriptedModel([ModelResponse.final("continued")])
+        history = (
+            Message("user", "first"),
+            Message("assistant", "answer"),
+        )
+
+        run = Agent(model, build_default_registry()).run("second", history=history)
+
+        self.assertEqual([message.content for message in run.messages[:3]], ["first", "answer", "second"])
+
+    def test_emits_trace_events(self) -> None:
+        tracer = InMemoryTraceSink()
+        model = ScriptedModel([ModelResponse.final("done")])
+
+        Agent(model, build_default_registry(), tracer=tracer).run("hello")
+
+        self.assertEqual(
+            [event.kind for event in tracer.events()],
+            ["run_started", "model_requested", "run_finished"],
+        )
 
 
 class ModelResponseTests(unittest.TestCase):
